@@ -1,6 +1,9 @@
 package com.txfast.app
 
 import android.Manifest
+import android.app.DownloadManager
+import android.content.Intent
+import android.graphics.drawable.GradientDrawable
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -131,6 +134,39 @@ class MainActivity : ComponentActivity() {
         layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
     }
 
+    private fun circle(icon: String, label: String, color: Int, onClick: () -> Unit): LinearLayout {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+            setOnClickListener { onClick() }
+        }
+        val c = TextView(this).apply {
+            text = icon
+            textSize = 30f
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(color) }
+            layoutParams = LinearLayout.LayoutParams(dp(78), dp(78))
+        }
+        val l = TextView(this).apply {
+            text = label
+            textSize = 16f
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10) }
+        }
+        box.addView(c)
+        box.addView(l)
+        return box
+    }
+
+    private fun openFiles() {
+        try {
+            startActivity(Intent(DownloadManager.ACTION_VIEW_DOWNLOADS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: Exception) {
+            toast("الملفات المستلمة في: Download/TX")
+        }
+    }
+
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -140,10 +176,16 @@ class MainActivity : ComponentActivity() {
         }
 
         homeBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        homeBox.addView(tv(34f, true).apply { text = "⚡ TX" })
-        homeBox.addView(tv(15f).apply { text = "نقل ملفات فائق السرعة بين الهواتف" })
-        homeBox.addView(btn("📤  إرسال", 0xFF2563EB.toInt()) { pickFiles.launch(arrayOf("*/*")) })
-        homeBox.addView(btn("📥  استقبال (مسح QR)", 0xFF16A34A.toInt()) {
+        homeBox.addView(tv(30f, true).apply { text = "⚡ TX"; setTextColor(0xFF2563EB.toInt()) })
+        homeBox.addView(tv(14f).apply { text = "نقل ملفات فائق السرعة بين الهواتف"; alpha = 0.7f })
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            weightSum = 3f
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(48) }
+        }
+        row.addView(circle("📁", "ملفات", 0xFF2563EB.toInt()) { openFiles() })
+        row.addView(circle("📥", "استلام", 0xFF2563EB.toInt()) {
             scan.launch(
                 ScanOptions()
                     .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
@@ -152,14 +194,17 @@ class MainActivity : ComponentActivity() {
                     .setPrompt("وجّه الكاميرا على كود الجهاز المُرسل")
             )
         })
+        row.addView(circle("📤", "إرسال", 0xFF2563EB.toInt()) { pickFiles.launch(arrayOf("*/*")) })
+        homeBox.addView(row)
+
         directSwitch = Switch(this).apply {
             text = "اتصال مباشر (هوتسبوت خاص) — أسرع، بدون راوتر"
             textSize = 15f
-            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(28) }
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(56) }
         }
         homeBox.addView(directSwitch)
         homeBox.addView(tv(13f).apply {
-            text = "بدون اتصال مباشر: الهاتفين لازم على نفس الواي فاي (أو هوتسبوت أحدهما)."
+            text = "إرسال: اختر الملفات فيظهر كود QR، والجهاز التاني يضغط «استلام» ويمسحه.\nبدون الاتصال المباشر: الهاتفين على نفس الواي فاي أو هوتسبوت أحدهما."
             alpha = 0.7f
         })
 
