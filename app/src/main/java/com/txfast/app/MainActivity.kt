@@ -22,7 +22,10 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
 import android.net.wifi.SoftApConfiguration
+import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
+import android.net.wifi.p2p.WifiP2pConfig
+import android.net.wifi.p2p.WifiP2pManager
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
 import android.os.Bundle
@@ -76,6 +79,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var speedTv: TextView
     private lateinit var bar: ProgressBar
     private lateinit var qrView: ImageView
+    private lateinit var linkTv: TextView
+    private var p2pManager: WifiP2pManager? = null
+    private var p2pChannel: WifiP2pManager.Channel? = null
+    private var directKind = ""
 
     private var sender: Sender? = null
     private var receiver: Receiver? = null
@@ -274,6 +281,7 @@ class MainActivity : ComponentActivity() {
             visibility = View.GONE
         }
         statusTv = tv(18f, true)
+        linkTv = tv(14f).apply { alpha = 0.8f }
         qrView = ImageView(this).apply {
             layoutParams = LinearLayout.LayoutParams(dp(260), dp(260)).apply {
                 gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(16)
@@ -287,6 +295,7 @@ class MainActivity : ComponentActivity() {
         speedTv = tv(16f)
         resultBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         sessionBox.addView(statusTv)
+        sessionBox.addView(linkTv)
         sessionBox.addView(qrView)
         sessionBox.addView(bar)
         sessionBox.addView(speedTv)
@@ -529,6 +538,7 @@ class MainActivity : ComponentActivity() {
         bar.progress = 0
         speedTv.text = ""
         statusTv.text = status
+        linkTv.text = ""
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         try {
             val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
@@ -547,6 +557,9 @@ class MainActivity : ComponentActivity() {
         sender = null; receiver = null
         try { reservation?.close() } catch (_: Exception) {}
         reservation = null
+        try { p2pManager?.removeGroup(p2pChannel, null) } catch (_: Exception) {}
+        try { p2pChannel?.close() } catch (_: Exception) {}
+        p2pManager = null; p2pChannel = null
         val cm = getSystemService(ConnectivityManager::class.java)
         netCallback?.let { try { cm.unregisterNetworkCallback(it) } catch (_: Exception) {} }
         netCallback = null
@@ -573,7 +586,7 @@ class MainActivity : ComponentActivity() {
 
     private fun startSend(srcs: List<Src>) {
         val direct = directSwitch.isChecked
-        beginSession(if (direct) "جاري تشغيل الهوتسبوت 5GHz..." else "جاري التحضير...", true)
+        beginSession(if (direct) "جاري تشغيل Wi-Fi Direct (5GHz)..." else "جاري التحضير...", true)
         val my = sessionId
         if (!direct) {
             serve(srcs, null, emptyList(), my)
@@ -592,8 +605,61 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @Suppress("DEPRECATION")
+    /** Wi-Fi Direct على 5GHz (نفس أسلوب كويك شير). لو فشل نرجع للهوتسبوت العادي. */
     private fun startHotspot(onReady: (Hotspot) -> Unit, onFail: (String) -> Unit) {
+        startP2pGroup(
+            { hs -> directKind = "Wi-Fi Direct 5GHz"; onReady(hs) },
+            { directKind = "هوتسبوت"; startLohs(onReady, onFail) }
+        )
+    }
+
+    private fun startP2pGroup(onReady: (Hotspot) -> Unit, onFail: () -> Unit) {
+        val mgr = try { getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager } catch (_: Exception) { null }
+        if (mgr == null) { onFail(); return }
+        val ch = try { mgr.initialize(this, Looper.getMainLooper(), null) } catch (_: Exception) { null }
+        if (ch == null) { onFail(); return }
+        p2pManager = mgr
+        p2pChannel = ch
+        val name = "DIRECT-tx-" + newToken().substring(0, 4)
+        val pass = newToken()
+        fun create() {
+            try {
+                val cfg = WifiP2pConfig.Builder()
+                    .setNetworkName(name)
+                    .setPassphrase(pass)
+                    .enablePersistentMode(false)
+                    .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_5GHZ)
+                    .build()
+                mgr.createGroup(ch, cfg, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() { onReady(Hotspot(name, pass, 2)) }
+                    override fun onFailure(reason: Int) { onFail() }
+                })
+            } catch (_: Exception) { onFail() }
+        }
+        try {
+            mgr.removeGroup(ch, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() { create() }
+                override fun onFailure(reason: Int) { create() }
+            })
+        } catch (_: Exception) { create() }
+    }
+
+    private fun describeLink(info: WifiInfo?): String {
+        if (info == null) return ""
+        val f = info.frequency
+        val band = when { f >= 5925 -> "6GHz"; f >= 4900 -> "5GHz"; f > 0 -> "2.4GHz"; else -> "" }
+        val sp = info.linkSpeed
+        if (band.isEmpty() && sp <= 0) return ""
+        return "📶 $band • " + (if (sp > 0) "$sp Mbps" else "?")
+    }
+
+    @Suppress("DEPRECATION")
+    private fun lanLink(): String = try {
+        describeLink((applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager).connectionInfo)
+    } catch (_: Exception) { "" }
+
+    @Suppress("DEPRECATION")
+    private fun startLohs(onReady: (Hotspot) -> Unit, onFail: (String) -> Unit) {
         val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
 
         fun launch(withConfig: Boolean) {
@@ -652,7 +718,7 @@ class MainActivity : ComponentActivity() {
                     if (ip != null) break
                     Thread.sleep(250)
                 }
-                if (ip == null && hs != null) ip = Net.localIps().firstOrNull()
+                if (ip == null && hs != null) ip = Net.localIps().firstOrNull() ?: (if (directKind.startsWith("Wi-Fi Direct")) "192.168.49.1" else null)
                 if (ip == null) {
                     s.stop()
                     throw IllegalStateException("مفيش شبكة واي فاي. شغّل الواي فاي أو الهوتسبوت وجرّب تاني.")
@@ -668,6 +734,7 @@ class MainActivity : ComponentActivity() {
                     total = s.totalSize
                     qrView.setImageBitmap(bmp)
                     qrView.visibility = View.VISIBLE
+                    linkTv.text = if (hs != null) "⚡ $directKind" else lanLink()
                     statusTv.text = "خلّي الجهاز التاني يمسح الكود 👇\n(${srcs.size} ملف • ${fmt(total)})"
                 }
             } catch (e: Exception) {
@@ -698,6 +765,7 @@ class MainActivity : ComponentActivity() {
         beginSession("جاري الاتصال...", false)
         val my = sessionId
         if (ssid.isEmpty()) {
+            linkTv.text = lanLink()
             runReceive(ip, port, token, my)
             return
         }
@@ -715,6 +783,8 @@ class MainActivity : ComponentActivity() {
             override fun onAvailable(network: Network) {
                 if (my != sessionId) return
                 cm.bindProcessToNetwork(network)
+                val wi = try { cm.getNetworkCapabilities(network)?.transportInfo as? WifiInfo } catch (_: Exception) { null }
+                runUi { if (my == sessionId) linkTv.text = describeLink(wi) }
                 runReceive(ip, port, token, my)
             }
 
