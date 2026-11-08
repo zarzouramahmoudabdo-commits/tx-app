@@ -3,6 +3,7 @@ package com.txfast.app
 import android.content.ContentResolver
 import android.content.ContentValues
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.system.Os
@@ -58,9 +59,11 @@ object Net {
     }
 }
 
+/** مصدر ملف للإرسال (ملف عادي، Uri، أو APK). */
+class Src(val name: String, val size: Long, val open: () -> ParcelFileDescriptor?)
+
 class Sender(
-    private val cr: ContentResolver,
-    private val uris: List<Uri>,
+    private val srcs: List<Src>,
     private val token: String
 ) {
     private var server: ServerSocketChannel? = null
@@ -74,18 +77,7 @@ class Sender(
 
     fun start(onBytes: (Long) -> Unit): Int {
         this.onBytes = onBytes
-        infos = uris.map { u ->
-            var name = "file"
-            var size = -1L
-            cr.query(u, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
-                if (c.moveToFirst()) {
-                    c.getString(0)?.let { name = it }
-                    if (!c.isNull(1)) size = c.getLong(1)
-                }
-            }
-            if (size < 0) size = cr.openFileDescriptor(u, "r")?.use { it.statSize } ?: 0L
-            FileInfo(name, size)
-        }
+        infos = srcs.map { FileInfo(it.name, it.size) }
         val ssc = ServerSocketChannel.open()
         ssc.bind(InetSocketAddress(0))
         server = ssc
@@ -137,7 +129,7 @@ class Sender(
                     val idx = req.getInt()
                     var pos = req.getLong()
                     var left = req.getLong()
-                    val pfd = cr.openFileDescriptor(uris[idx], "r") ?: return
+                    val pfd = srcs[idx].open() ?: return
                     pfd.use {
                         val fd: FileDescriptor = it.fileDescriptor
                         val buf = ByteBuffer.allocateDirect(CHUNK)
@@ -172,6 +164,7 @@ class Receiver(
 ) {
     private val sockets = ConcurrentLinkedQueue<SocketChannel>()
     @Volatile private var cancelled = false
+    val saved = ArrayList<Pair<String, Uri>>()
 
     fun cancel() {
         cancelled = true
@@ -234,6 +227,7 @@ class Receiver(
                 }
                 val uri = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv)
                     ?: throw IOException("مش قادر أنشئ الملف: $safe")
+                saved.add(safe to uri)
                 val pfd = cr.openFileDescriptor(uri, "rw") ?: throw IOException("مش قادر أفتح الملف: $safe")
                 val n = if (f.size >= (32L shl 20)) WORKERS else if (f.size >= (8L shl 20)) 2 else 1
                 val job = Job(i, uri, pfd, AtomicInteger(if (f.size == 0L) 0 else n))
