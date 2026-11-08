@@ -625,22 +625,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
             try {
-                if (withConfig) {
-                    // أندرويد 13+: نطلب نطاق 5GHz صراحة لأسرع سرعة
-                    val cfg = SoftApConfiguration.Builder()
-                        .setSsid("TX-" + newToken().substring(0, 6))
-                        .setPassphrase(newToken(), SoftApConfiguration.SECURITY_TYPE_WPA2_PSK)
-                        .setBand(SoftApConfiguration.BAND_5GHZ)
-                        .build()
-                    wm.startLocalOnlyHotspot(cfg, ContextCompat.getMainExecutor(this), cb)
-                } else {
-                    wm.startLocalOnlyHotspot(cb, ui)
-                }
+                wm.startLocalOnlyHotspot(cb, ui)
             } catch (e: Exception) {
                 if (withConfig) launch(false) else onFail("فشل تشغيل الهوتسبوت: " + e.message)
             }
         }
-        launch(Build.VERSION.SDK_INT >= 33)
+        launch(false)
     }
 
     private fun newToken(): String {
